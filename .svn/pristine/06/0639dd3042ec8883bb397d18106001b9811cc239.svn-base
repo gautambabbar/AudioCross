@@ -1,0 +1,177 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.IO;
+
+namespace HelloWorld
+{
+    class Program
+    {
+        
+        static void Main(string[] args)
+        {
+            int maxIndex=0;
+            double maxValue=0;
+            double[] result;
+            String audioFile;
+            String refAudioFile;
+            String returnValue;
+            double correlation;
+            double delay;
+            byte[] audioByteData;
+            byte[] refAudioByteData;
+            //Attempt to read parameters
+            try
+            {
+                audioFile = args[0];
+                refAudioFile = args[1];
+                returnValue = args[2];
+            }
+            catch (IndexOutOfRangeException e)
+            {
+                Console.WriteLine("Please enter correct arguments in the order: AudioFile ReferenceAudioFile DesiredOutput");
+                audioFile = null;
+                refAudioFile = null;
+                returnValue = null;
+                Environment.Exit(0);
+            }
+            
+            //audioFile = "C:\\Users\\gmaser\\Documents\\JavaTestAudio.wav";
+            //refAudioFile = "C:\\Users\\gmaser\\Documents\\JavaTestRefAudio.wav";
+            //returnValue = "delay";
+
+            //Attempt to read byte data from wav file
+            try
+            {
+                audioByteData = File.ReadAllBytes(audioFile);
+                
+            }
+            catch (IOException e)
+            {
+                Console.WriteLine("Error while reading file specified in first argument");
+                audioByteData = null;
+                Environment.Exit(0);
+            }
+            try
+            {
+                refAudioByteData = File.ReadAllBytes(refAudioFile);
+            }
+            catch (IOException e)
+            {
+                Console.WriteLine("Error while reading file specified in second argument");
+                refAudioByteData = null;
+                Environment.Exit(0);
+            }
+            //Convert bytes to double values
+            double[] audioData = convertBytes(audioByteData);
+            double[] refAudioData = convertBytes(refAudioByteData);
+            //Preform cross correlation on the double arrays
+            alglib.corrr1d(refAudioData, refAudioData.Length, audioData, audioData.Length, out result);
+            //Search results array for the highest correlation value.  The index at this value is the lag
+            for (int i = 0; i < result.Length; i++)
+            {
+                if (result[i] > maxValue)
+                {
+                    maxValue = result[i];
+                    maxIndex = i;
+                }
+            }
+            //If the index is larger than the reference array then the lag should be considered negative.  See alglib.corrr1d documentaion for more info
+            if (maxIndex >= refAudioData.Length)
+            {
+                maxIndex = refAudioData.Length + audioData.Length - maxIndex;
+                maxIndex *= -1;
+            }
+            //Convert the index to seconds
+            delay = maxIndex / 100000.0;
+            //Normalize the value from the cross correlation function to represent actual correlation
+            correlation = normalize(audioData, refAudioData, maxIndex, maxValue);
+            //Print desired result
+            if (returnValue.Equals("delay", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine(delay);
+            }
+            else if (returnValue.Equals("correlation", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine(correlation);
+            }
+            else
+            {
+                Console.WriteLine("Please specify desired output (delay/correlation)");
+            }
+        }
+
+        public static double[] convertBytes(byte[] array){
+            int N = array.Length;
+            double[] data = new double[N / 2];
+            for (int i = 0; i < N / 2; i++)
+            {
+                data[i] = ((short)(((array[2 * i + 1] & 0xFF) << 8) + (array[2 * i] & 0xFF))) / ((double)short.MaxValue);
+            }
+            return data;
+        }
+
+        public static double normalize(double[] audio, double[] refAudio, int index, double value)
+        {
+            List<double> matchingData1 = audio.ToList();
+            List<double> matchingData2 = refAudio.ToList();
+            //The following code will truncate the audio data so only the matching part
+            //will remain and use that to calculate the correlation of the two audio files.  Otherwise
+            //the correlation of the audio files will include the unmatched parts
+            
+            double[] refAudioMod = new double[refAudio.Length - index];
+            double[] audioMod = new double[audio.Length - index];
+            double[] resultMod;
+            var offset = index;
+            if (index > 0)
+            {
+                //if the reference audio lags behind the test audio
+                for (int i = 0; i < audio.Length - offset; i++)
+                {
+                    audioMod[i] = audio[i];
+                }
+                matchingData1 = audio.Take(audio.Length - offset).ToList();
+
+                for (int i = offset; i < refAudio.Length; i++)
+                {
+                    refAudioMod[i - offset] = refAudio[i];
+                }
+                matchingData2 = refAudio.Skip(offset).Take(refAudio.Length - offset).ToList();
+            }
+            else
+            {
+                //if the test audio lags behind the ref audio
+                offset *= -1;
+                for (int i = 0; i < refAudio.Length - offset; i++)
+                {
+                    refAudioMod[i] = refAudio[i];
+                }
+                matchingData1 = refAudio.Take(refAudio.Length - offset).ToList();
+                for (int i = offset; i < audio.Length; i++)
+                {
+                    audioMod[i - offset] = audio[i];
+                }
+                matchingData2 = audio.Skip(offset).Take(audio.Length - offset).ToList();
+            }
+            alglib.corrr1d(refAudioMod, refAudioMod.Length, audioMod, audioMod.Length, out resultMod);
+            value = 0;
+            for (int i = 0; i < resultMod.Length; i++)
+            {
+                if (resultMod[i] > value)
+                {
+                    value = resultMod[i];
+                } 
+            }
+            
+            var mx = matchingData1.Average();
+            var my = matchingData2.Average();
+            var denom1 = Math.Sqrt(matchingData1.Sum(x => (x - mx) * (x - mx)));
+            var denom2 = Math.Sqrt(matchingData2.Sum(y => (y - my) * (y - my)));
+            var maximumNormalizedCrossCorrelation = value / (denom1 * denom2);
+            return maximumNormalizedCrossCorrelation;
+        }
+
+    }
+}
